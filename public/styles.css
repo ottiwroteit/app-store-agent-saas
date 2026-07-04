@@ -2580,8 +2580,21 @@ select {
   text-transform: uppercase;
 }
 
-.public-connection-card input {
+.public-connection-card input,
+.public-connection-card textarea {
   min-width: 0;
+}
+
+.public-connection-card textarea {
+  resize: vertical;
+}
+
+.public-vault-note {
+  background: #eef8f2;
+  border: 1px solid #ccebd9;
+  border-radius: 6px;
+  color: #236341 !important;
+  padding: 6px 8px;
 }
 
 .public-checkbox {

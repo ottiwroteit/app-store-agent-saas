@@ -221,7 +221,7 @@ async function saveCustomerConnection(values = {}) {
     const payload = await fetchJson(`/api/aso-saas/connections?${workspaceQuery()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(connection)
+      body: JSON.stringify({ service: values.service, fields: values })
     });
     if (payload.error) {
       setStatus(payload.error);
@@ -365,6 +365,7 @@ function customerConnectionPanel() {
 
 function customerConnectionCard(connection = {}) {
   const fields = connection.fields || {};
+  const storedSecrets = connection.storedSecrets || {};
   if (connection.service === "app-store-connect") {
     return `
       <form data-customer-connection-form class="public-connection-card ${connection.ready ? "ready" : ""}">
@@ -374,7 +375,9 @@ function customerConnectionCard(connection = {}) {
         <label><span>Key ID</span><input name="keyId" value="${escapeHtml(fields.keyId || "")}" placeholder="ABC123DEFG"></label>
         <label><span>Issuer ID</span><input name="issuerId" value="${escapeHtml(fields.issuerId || "")}" placeholder="uuid issuer id"></label>
         <label><span>Vendor number optional</span><input name="vendorNumber" value="${escapeHtml(fields.vendorNumber || "")}" placeholder="Sales reports"></label>
-        <label class="public-checkbox"><input name="privateKeyStored" type="checkbox"${fields.privateKeyStored ? " checked" : ""}> <span>Private key is stored in the app credential vault</span></label>
+        <label><span>.p8 private key</span><textarea name="privateKeySecret" rows="3" placeholder="Paste AuthKey_<KEY_ID>.p8 here to store it encrypted. Leave blank if already stored."></textarea></label>
+        ${storedSecrets.privateKey ? `<p class="public-vault-note">Encrypted key stored ${escapeHtml(formatDate(storedSecrets.privateKey.storedAt))}</p>` : ""}
+        <label class="public-checkbox"><input name="privateKeyStored" type="checkbox"${fields.privateKeyStored ? " checked" : ""}> <span>Private key is already stored in the app credential vault or managed externally</span></label>
         <button class="button secondary" type="submit">Save ASC Setup</button>
       </form>
     `;
@@ -387,7 +390,9 @@ function customerConnectionCard(connection = {}) {
         <p>${escapeHtml(connection.purpose)}</p>
         <label><span>Project ID</span><input name="projectId" value="${escapeHtml(fields.projectId || "")}" placeholder="proj..."></label>
         <label><span>Project label optional</span><input name="projectName" value="${escapeHtml(fields.projectName || "")}" placeholder="App name"></label>
-        <label class="public-checkbox"><input name="apiKeyStored" type="checkbox"${fields.apiKeyStored ? " checked" : ""}> <span>RevenueCat API key is stored in the app credential vault</span></label>
+        <label><span>RevenueCat API key</span><input name="apiKeySecret" type="password" autocomplete="off" placeholder="Store encrypted; never shown again"></label>
+        ${storedSecrets.apiKey ? `<p class="public-vault-note">Encrypted API key stored ${escapeHtml(formatDate(storedSecrets.apiKey.storedAt))} ${escapeHtml(storedSecrets.apiKey.preview || "")}</p>` : ""}
+        <label class="public-checkbox"><input name="apiKeyStored" type="checkbox"${fields.apiKeyStored ? " checked" : ""}> <span>RevenueCat API key is already stored in the app credential vault or managed externally</span></label>
         <button class="button secondary" type="submit">Save RevenueCat Setup</button>
       </form>
     `;
@@ -401,7 +406,9 @@ function customerConnectionCard(connection = {}) {
       <label><span>Team ID</span><input name="teamId" value="${escapeHtml(fields.teamId || "")}" placeholder="Apple Ads team ID"></label>
       <label><span>Key ID</span><input name="keyId" value="${escapeHtml(fields.keyId || "")}" placeholder="Apple Ads key ID"></label>
       <label><span>Org ID</span><input name="orgId" value="${escapeHtml(fields.orgId || "")}" placeholder="Apple Ads org ID"></label>
-      <label class="public-checkbox"><input name="privateKeyStored" type="checkbox"${fields.privateKeyStored ? " checked" : ""}> <span>Apple Ads private key is stored in the app credential vault</span></label>
+      <label><span>Apple Ads private key</span><textarea name="privateKeySecret" rows="3" placeholder="Paste the Apple Ads private key here to store it encrypted. Leave blank if already stored."></textarea></label>
+      ${storedSecrets.privateKey ? `<p class="public-vault-note">Encrypted key stored ${escapeHtml(formatDate(storedSecrets.privateKey.storedAt))}</p>` : ""}
+      <label class="public-checkbox"><input name="privateKeyStored" type="checkbox"${fields.privateKeyStored ? " checked" : ""}> <span>Apple Ads private key is already stored in the app credential vault or managed externally</span></label>
       <button class="button secondary" type="submit">Save Apple Ads Setup</button>
     </form>
   `;
@@ -626,8 +633,14 @@ function normalizeCustomerConnection(values = {}) {
   const service = normalizeConnectionService(values.service);
   const defaults = defaultCustomerConnections().find((item) => item.service === service) || defaultCustomerConnections()[0];
   const fields = {};
+  const hasPrivateKeySecret = Boolean(String(values.privateKeySecret || "").trim());
+  const hasApiKeySecret = Boolean(String(values.apiKeySecret || "").trim());
   for (const key of defaults.required) {
-    if (key.endsWith("Stored")) fields[key] = values[key] === "on" || values[key] === "true" || values[key] === true;
+    if (key.endsWith("Stored")) {
+      fields[key] = values[key] === "on" || values[key] === "true" || values[key] === true
+        || (key === "privateKeyStored" && hasPrivateKeySecret)
+        || (key === "apiKeyStored" && hasApiKeySecret);
+    }
     else fields[key] = String(values[key] || "").trim();
   }
   if (values.vendorNumber) fields.vendorNumber = String(values.vendorNumber).trim();
@@ -1375,6 +1388,13 @@ function rankMoveLabel(delta) {
   const value = Number(delta);
   if (!Number.isFinite(value) || value === 0) return "flat";
   return value > 0 ? `down ${value}` : `up ${Math.abs(value)}`;
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function formValues(form) {

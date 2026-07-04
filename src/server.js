@@ -1,5 +1,5 @@
 import http from "node:http";
-import { createHash, createHmac, createSign, generateKeyPairSync, randomUUID, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createHash, createHmac, createSign, generateKeyPairSync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,7 @@ const rankHistoryPath = join(dataDir, "rank-history.json");
 const asoProspectHistoryPath = join(dataDir, "aso-prospect-history.json");
 const asoWorkspacesPath = join(dataDir, "aso-saas-workspaces.json");
 const asoNotificationOutboxPath = join(dataDir, "aso-saas-notification-outbox.json");
+const asoCredentialVaultKeyPath = join(dataDir, "aso-credential-vault-key");
 const asoSupabaseWorkspacesTable = process.env.ASO_SUPABASE_WORKSPACES_TABLE || "aso_saas_workspaces";
 const asoSupabaseNotificationsTable = process.env.ASO_SUPABASE_NOTIFICATIONS_TABLE || "aso_saas_notifications";
 const secretsDir = join(root, "secrets");
@@ -1092,12 +1093,15 @@ function defaultAsoCustomerConnections() {
   ];
 }
 
-function normalizeAsoCustomerConnection(payload = {}) {
+function normalizeAsoCustomerConnection(payload = {}, options = {}) {
   const service = normalizeAsoConnectionService(payload.service);
   const defaults = defaultAsoCustomerConnections().find((item) => item.service === service);
   if (!defaults) throw new Error("Unknown connection service.");
   const rawFields = payload.fields && typeof payload.fields === "object" ? payload.fields : payload;
   const fields = sanitizeAsoConnectionFields(service, rawFields);
+  const secrets = extractAsoConnectionSecrets(service, rawFields);
+  const vault = mergeAsoConnectionVault(options.existing?.vault || payload.vault || {}, secrets);
+  applyAsoVaultFlags(service, fields, vault);
   const missing = defaults.required.filter((field) => !fields[field]);
   const ready = missing.length === 0;
   return {
@@ -1105,6 +1109,8 @@ function normalizeAsoCustomerConnection(payload = {}) {
     ready,
     status: ready ? "connected" : "needs-credentials",
     fields,
+    vault,
+    storedSecrets: summarizeAsoConnectionVault(vault),
     missing,
     updatedAt: new Date().toISOString()
   };
@@ -1153,9 +1159,95 @@ function sanitizeAsoConnectionFields(service, fields = {}) {
   }));
 }
 
+function extractAsoConnectionSecrets(service, fields = {}) {
+  const getSecret = (...keys) => keys
+    .map((key) => fields[key])
+    .find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+  const secrets = {};
+  if (service === "app-store-connect") {
+    const privateKey = getSecret("privateKeySecret", "privateKey", "p8PrivateKey", "ASC_PRIVATE_KEY", "ASC_PRIVATE_KEY_CONTENT");
+    if (privateKey) secrets.privateKey = String(privateKey).trim();
+  }
+  if (service === "revenuecat") {
+    const apiKey = getSecret("apiKeySecret", "apiKey", "revenueCatApiKey", "REVENUECAT_API_KEY");
+    if (apiKey) secrets.apiKey = String(apiKey).trim();
+  }
+  if (service === "apple-ads") {
+    const privateKey = getSecret("privateKeySecret", "privateKey", "p8PrivateKey", "APPLE_ADS_PRIVATE_KEY", "APPLE_ADS_PRIVATE_KEY_CONTENT");
+    if (privateKey) secrets.privateKey = String(privateKey).trim();
+  }
+  return secrets;
+}
+
+function mergeAsoConnectionVault(existingVault = {}, secrets = {}) {
+  const vault = { ...(existingVault && typeof existingVault === "object" ? existingVault : {}) };
+  for (const [name, value] of Object.entries(secrets)) {
+    const encrypted = encryptAsoCredentialSecret(value);
+    if (encrypted) vault[name] = encrypted;
+  }
+  return vault;
+}
+
+function applyAsoVaultFlags(service, fields, vault = {}) {
+  if ((service === "app-store-connect" || service === "apple-ads") && vault.privateKey) fields.privateKeyStored = true;
+  if (service === "revenuecat" && vault.apiKey) fields.apiKeyStored = true;
+}
+
+function summarizeAsoConnectionVault(vault = {}) {
+  return Object.fromEntries(Object.entries(vault)
+    .filter(([, entry]) => entry && typeof entry === "object")
+    .map(([name, entry]) => [name, {
+      stored: true,
+      storedAt: entry.storedAt || "",
+      preview: entry.preview || ""
+    }]));
+}
+
+function sanitizeAsoConnectionForClient(connection = {}) {
+  const { vault: _vault, ...safe } = connection;
+  return {
+    ...safe,
+    storedSecrets: summarizeAsoConnectionVault(connection.vault || {})
+  };
+}
+
+function encryptAsoCredentialSecret(value) {
+  const secret = String(value || "").trim();
+  if (!secret) return null;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", asoCredentialVaultKey(), iv);
+  const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    algorithm: "aes-256-gcm",
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+    preview: secretPreview(secret),
+    storedAt: new Date().toISOString()
+  };
+}
+
+function asoCredentialVaultKey() {
+  const envKey = process.env.ASO_CREDENTIAL_VAULT_KEY || "";
+  if (envKey) return createHash("sha256").update(envKey).digest();
+  mkdirSync(dataDir, { recursive: true });
+  if (!existsSync(asoCredentialVaultKeyPath)) {
+    writeFileSync(asoCredentialVaultKeyPath, randomBytes(32).toString("base64"));
+  }
+  return createHash("sha256").update(readFileSync(asoCredentialVaultKeyPath, "utf8")).digest();
+}
+
+function secretPreview(value) {
+  const text = String(value || "");
+  if (!text) return "";
+  if (text.includes("PRIVATE KEY")) return "private key stored";
+  return `...${text.slice(-4)}`;
+}
+
 function normalizeStoredAsoCustomerConnection(connection = {}) {
   try {
-    const normalized = normalizeAsoCustomerConnection(connection);
+    const normalized = normalizeAsoCustomerConnection(connection, { existing: connection });
     return {
       ...normalized,
       updatedAt: connection.updatedAt || normalized.updatedAt,
@@ -1166,19 +1258,19 @@ function normalizeStoredAsoCustomerConnection(connection = {}) {
   }
 }
 
-function upsertAsoCustomerConnection(connections = [], connection = null) {
+function upsertAsoCustomerConnection(connections = [], connection = null, options = {}) {
   const defaults = defaultAsoCustomerConnections();
   const normalizedRows = (Array.isArray(connections) ? connections : [])
     .map(normalizeStoredAsoCustomerConnection)
     .filter(Boolean);
   const merged = defaults.map((item) => normalizedRows.find((row) => row.service === item.service) || item);
-  if (!connection) return merged;
+  if (!connection) return options.expose ? merged.map(sanitizeAsoConnectionForClient) : merged;
   const normalizedConnection = normalizeStoredAsoCustomerConnection(connection);
-  if (!normalizedConnection) return merged;
+  if (!normalizedConnection) return options.expose ? merged.map(sanitizeAsoConnectionForClient) : merged;
   const index = merged.findIndex((item) => item.service === normalizedConnection.service);
   if (index >= 0) merged[index] = normalizedConnection;
   else merged.push(normalizedConnection);
-  return merged;
+  return options.expose ? merged.map(sanitizeAsoConnectionForClient) : merged;
 }
 
 function parseListParam(value) {
@@ -2108,7 +2200,9 @@ async function asoSaasAddAppPayload(url, req) {
 async function asoSaasConnectionsPayload(url, req) {
   const { workspace, workspaces } = await authenticateAsoWorkspace(url);
   const payload = await readJsonBody(req, 100_000);
-  const connection = normalizeAsoCustomerConnection(payload);
+  const service = normalizeAsoConnectionService(payload.service);
+  const existing = (workspace.connections || []).find((row) => row.service === service);
+  const connection = normalizeAsoCustomerConnection(payload, { existing });
   const connections = upsertAsoCustomerConnection(workspace.connections || defaultAsoCustomerConnections(), connection);
   const updated = {
     ...workspace,
@@ -2118,7 +2212,7 @@ async function asoSaasConnectionsPayload(url, req) {
   await writeAsoWorkspaces([updated, ...workspaces.filter((item) => item.id !== workspace.id)]);
   return {
     saved: true,
-    connection,
+    connection: sanitizeAsoConnectionForClient(connection),
     workspace: asoWorkspaceDetail(updated)
   };
 }
@@ -3617,7 +3711,7 @@ function asoWorkspaceDetail(workspace) {
     limits: workspace.limits,
     apps: (workspace.apps || []).map(asoWorkspaceAppDetail),
     onboarding: workspace.onboarding || [],
-    connections: upsertAsoCustomerConnection(workspace.connections || []),
+    connections: upsertAsoCustomerConnection(workspace.connections || [], null, { expose: true }),
     stripe: workspace.stripe || {},
     notifications: workspace.notifications || {
       email: workspace.email,
@@ -3947,6 +4041,13 @@ function asoSaasLaunchReadiness(storage = asoStorageStatus()) {
       ready: Boolean(storage.configured),
       required: true,
       detail: storage.configured ? `Supabase tables ${storage.workspacesTable}, ${storage.notificationsTable}` : `Using local JSON at ${storage.localWorkspacePath}`
+    },
+    {
+      key: "credential-vault-key",
+      label: "Credential vault key",
+      ready: Boolean(process.env.ASO_CREDENTIAL_VAULT_KEY),
+      required: true,
+      detail: "Set ASO_CREDENTIAL_VAULT_KEY before storing customer App Store Connect, RevenueCat, or Apple Ads credentials in production."
     },
     {
       key: "stripe-checkout",

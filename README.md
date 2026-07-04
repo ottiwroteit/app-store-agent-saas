@@ -45,7 +45,7 @@ Without complete credentials, the dashboard runs in sample-data mode and shows t
 
 The dashboard stores private key file paths only. It does not ask for or store `.p8` private key contents in the browser.
 
-For the customer SaaS workspace, users connect their own App Store Connect, RevenueCat, and Apple Ads credentials from the workspace setup panel. The app records non-secret readiness fields such as key IDs, project IDs, and whether a key has been stored through the secure credential flow; raw private key contents should never be pasted into chat or committed to the repo.
+For the customer SaaS workspace, users connect their own App Store Connect, RevenueCat, and Apple Ads credentials from the workspace setup panel. The app records non-secret readiness fields such as key IDs and project IDs, and stores submitted API/private keys encrypted server-side. Raw private key contents should never be pasted into chat or committed to the repo.
 
 ## Local API Routes
 
@@ -65,7 +65,7 @@ For the customer SaaS workspace, users connect their own App Store Connect, Reve
 - `POST /api/aso-saas/signup` creates a local trial workspace and returns a one-time customer access link.
 - `POST /api/aso-saas/login` re-issues a local workspace access link by email and app URL.
 - `GET /api/aso-saas/workspace` returns a token-authenticated customer workspace.
-- `POST /api/aso-saas/connections` saves non-secret customer App Store Connect, RevenueCat, or Apple Ads connection readiness for the authenticated workspace.
+- `POST /api/aso-saas/connections` saves customer App Store Connect, RevenueCat, or Apple Ads connection setup for the authenticated workspace, encrypting submitted API/private key material before storage.
 - `POST /api/aso-saas/apps` adds or updates a tracked app inside the authenticated workspace and enforces plan app limits.
 - `POST /api/aso-saas/keywords` adds, removes, or replaces tracked keyword seeds for the selected app and enforces the plan keyword limit.
 - `GET /api/aso-saas/competitors` returns named competitor tracking and keyword-gap analysis for the selected app.
@@ -90,6 +90,7 @@ Workspace history is append-only and summarized into Rank Rescue trend windows. 
 The ASO SaaS path runs without paid credentials by using public App Store/iTunes data. For paid subscriptions, configure:
 
 - `ASO_SAAS_PUBLIC_URL`
+- `ASO_CREDENTIAL_VAULT_KEY`
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 - `STRIPE_ASO_RESCUE_PRICE_ID`
@@ -113,6 +114,8 @@ For production storage, run `docs/aso-saas-storage-schema.sql` in Supabase and c
 - `ASO_MONITOR_ADMIN_TOKEN` to protect the monitor endpoint in hosted environments
 
 Until Stripe is configured, signup creates a local 14-day trial workspace. Until email/SMS providers are configured, digest sends are written to the configured notification store with the exact email and SMS body that would be delivered. Without Supabase, workspace and notification data stays in `data/aso-saas-workspaces.json` and `data/aso-saas-notification-outbox.json`. Raw customer access tokens are shown once in the generated link; only token hashes are stored.
+
+Set `ASO_CREDENTIAL_VAULT_KEY` in production before customers connect credentials. In local development, the app creates an ignored `data/aso-credential-vault-key` fallback so submitted RevenueCat/API private keys are still stored as ciphertext rather than plaintext.
 
 Use `GET /api/aso-saas/readiness` before selling paid access. It returns `mode: "production-ready"` only when the public HTTPS URL, Supabase storage, Stripe checkout prices, Stripe webhook secret, email delivery, and hosted monitor token are configured. SMS is reported separately as optional for Rescue and expected for Growth/Studio alerts.
 
