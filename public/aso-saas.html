@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rank Rescue ASO</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="public-saas-page">
+  <main class="public-saas-shell">
+    <section class="public-saas-panel public-saas-intake">
+      <div class="public-saas-brand">
+        <div class="brand-mark">ASO</div>
+        <div>
+          <h1>Rank Rescue</h1>
+          <p>Portfolio ASO console for iOS apps.</p>
+        </div>
+      </div>
+      <form id="public-analyze-form" class="public-saas-form">
+        <label>
+          <span>App Store URL</span>
+          <input name="appUrl" type="url" required value="https://apps.apple.com/us/app/legend-run-162-0/id6782313559">
+        </label>
+        <div class="public-saas-row">
+          <label>
+            <span>Country</span>
+            <input name="country" type="text" maxlength="2" value="US">
+          </label>
+          <label>
+            <span>Baseline rank</span>
+            <input name="baselineRank" type="number" value="60" min="1">
+          </label>
+        </div>
+        <label>
+          <span>Keywords</span>
+          <textarea name="keywords" rows="4">162-0, 162 and 0, baseball game, baseball simulator, baseball manager, baseball gm, baseball lineup, baseball strategy</textarea>
+        </label>
+        <div class="public-saas-row">
+          <button class="button" type="submit">Save + Analyze</button>
+          <button class="button secondary" type="button" id="public-import-asc-apps">Import ASC Apps</button>
+          <button class="button secondary" type="button" id="public-refresh-campaigns">Refresh Campaigns</button>
+        </div>
+      </form>
+      <div id="public-status" class="public-status">Ready.</div>
+      <section id="public-workspace" class="public-workspace"></section>
+    </section>
+    <section class="public-saas-results" id="public-results"></section>
+  </main>
+  <script type="module" src="/aso-saas.js"></script>
+</body>
+</html>

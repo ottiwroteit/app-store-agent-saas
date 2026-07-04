@@ -1,0 +1,6 @@
+.env
+data
+node_modules
+secrets
+.o11y
+.DS_Store
